@@ -5,8 +5,8 @@
 //
 //   appAuth/list                  → {providers: [{id, signedIn, account?}]}
 //   appAuth/usage {provider}      → {provider, status, windows, plan?}
-//   appAuth/begin  {provider}     → {attemptId}
-//   appAuth/poll   {attemptId}    → {phase, url?, userCode?, message?, placeholder?, error?}
+//   appAuth/begin  {provider, selectMethod?} → {attemptId}
+//   appAuth/poll   {attemptId}    → {phase, options?, url?, userCode?, message?, placeholder?, error?}
 //   appAuth/answer {attemptId, value} → {}
 //   appAuth/cancel {attemptId}    → {}
 //   appAuth/signOut {provider}    → {}
@@ -82,8 +82,8 @@ export default class AppAuth extends TypertRemoteService {
     return this.bridge.usage(provider)
   }
 
-  begin(provider) {
-    return this.bridge.begin(provider)
+  begin(provider, selectMethod) {
+    return this.bridge.begin(provider, selectMethod)
   }
 
   poll(attemptId) {

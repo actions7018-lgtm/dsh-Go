@@ -20,6 +20,7 @@
 /// [DshSubscriptions.signOut] removes both.
 library;
 
+import 'errors.dart';
 import 'json.dart';
 import 'session_api.dart';
 
@@ -126,6 +127,9 @@ enum LoginPhase {
   /// The bridge is starting the flow.
   starting,
 
+  /// Choose one of [LoginStep.options], answered with its id.
+  select,
+
   /// Open [LoginStep.url] in a browser; the engine catches the callback.
   open,
 
@@ -149,9 +153,25 @@ enum LoginPhase {
   bool get finished => this == done || this == failed || this == cancelled;
 }
 
+/// A method offered by the host's authorization flow.
+class LoginOption {
+  const LoginOption({required this.id, required this.label});
+
+  final String id;
+  final String label;
+}
+
 /// One poll of a sign-in attempt.
 class LoginStep {
-  const LoginStep({required this.phase, this.url, this.userCode, this.message, this.placeholder, this.error});
+  const LoginStep({
+    required this.phase,
+    this.url,
+    this.userCode,
+    this.message,
+    this.placeholder,
+    this.error,
+    this.options = const [],
+  });
 
   factory LoginStep.fromJson(Map<String, Object?> json) => LoginStep(
     phase: LoginPhase.fromWire(asString(json['phase'])),
@@ -160,8 +180,15 @@ class LoginStep {
     message: asString(json['message']),
     placeholder: asString(json['placeholder']),
     error: asString(json['error']),
+    options: [
+      for (final entry in asListOrEmpty(json['options']))
+        if (asMap(entry) case final option?)
+          if (asString(option['id']) case final id? when id.isNotEmpty)
+            if (asString(option['label']) case final label?) LoginOption(id: id, label: label),
+    ],
   );
 
+  final List<LoginOption> options;
   final LoginPhase phase;
   final String? url;
   final String? userCode;
@@ -188,7 +215,17 @@ extension DshSubscriptions on DshClient {
 
   /// `appAuth/begin`: starts a sign-in; returns the attempt id to poll.
   Future<String> beginLogin(Subscription subscription) async {
-    final result = asMap(await rpc.call('appAuth/begin', {'provider': subscription.wire})) ?? const {};
+    Object? response;
+    try {
+      // Opt in: older clients cannot render a select step.
+      response = await rpc.call('appAuth/begin', {'provider': subscription.wire, 'selectMethod': true});
+    } on DshRemoteException catch (error) {
+      // Old bridges reject the extra argument before invoking begin. Only that
+      // definite rejection is safe to retry; never replay an uncertain login.
+      if (error.code != 'gateway/arguments-invalid' || !error.message.contains('unexpected "selectMethod"')) rethrow;
+      response = await rpc.call('appAuth/begin', {'provider': subscription.wire});
+    }
+    final result = asMap(response) ?? const {};
     final id = asString(result['attemptId']);
     if (id == null) throw const FormatException('appAuth/begin: no attemptId');
     return id;

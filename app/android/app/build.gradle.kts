@@ -23,6 +23,9 @@ val hasWholeReleaseKey = listOf("storeFile", "keyAlias").all { !keyProps.getProp
 val runtimeOut = rootProject.file("../../runtime/out")
 // libtawcroot.so for the opt-in tawcroot launch method (runtime/tawcroot/build.py; missing = unavailable).
 val tawcrootOut = rootProject.file("../../runtime/out-tawcroot")
+val customBuild = System.getenv("DSH_CUSTOM_BUILD") == "1"
+val basePackage = "io.github.ccch1mneyyy.dsh_app"
+val installedPackage = if (customBuild) "$basePackage.custom" else basePackage
 
 // versionCode is the build minute, same encoding as tooling/build_number.py:
 // (year - 2026) * 10^8 + MMDDhhmm at UTC+8. tooling/build-apk.sh passes it as
@@ -41,7 +44,8 @@ android {
     // carry that API (no longer in android.jar). Device-test classpath only.
     useLibrary("android.test.base")
     useLibrary("android.test.runner")
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = System.getenv("DSH_ANDROID_NDK_VERSION") ?: flutter.ndkVersion
+    buildFeatures { buildConfig = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -49,7 +53,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ccch1mneyyy.dsh_app"
+        applicationId = installedPackage
+        manifestPlaceholders["appLabel"] = if (customBuild) "DSH Go Custom" else "DSH Go"
+        resValue("string", "static_shortcut_package", installedPackage)
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
         minSdk = 26
         // Target 28 like Termux, so the API 29+ exec restriction on app-private
@@ -121,6 +127,10 @@ android {
                 enableV3Signing = true
             }
         }
+    }
+
+    if (customBuild) {
+        require(hasWholeReleaseKey) { "Configure the Custom signing key in android/key.properties" }
     }
 
     buildTypes {

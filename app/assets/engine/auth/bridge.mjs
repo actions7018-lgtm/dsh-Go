@@ -11,8 +11,8 @@
 // DeepSeek account platform does internally (`ctx.authorization.begin`) and turns
 // the flow's notices and prompts into a small polled state machine:
 //
-//   begin → starting → open | device | prompt → done | failed | cancelled
-//                       (answer() replies to a pending paste prompt)
+//   begin → starting → select | open | device | prompt → done | failed | cancelled
+//                       (answer() replies to a selection or pending paste prompt)
 //
 // After a successful sign-in it declares the catalog route
 // (`llm-pi-ai.providers.<id>`) so the provider's models show up; sign-out removes
@@ -179,9 +179,11 @@ const settleWithin = (promise, ms) => Promise.race([Promise.resolve(promise).cat
 
 /** One sign-in attempt. Only the bridge mutates it. */
 class Attempt {
-  constructor(id, provider) {
+  constructor(id, provider, selectMethod) {
     this.id = id
     this.provider = provider
+    this.selectMethod = selectMethod
+    this.options = undefined
     this.phase = 'starting'
     this.message = COPY.starting
     this.url = undefined
@@ -215,6 +217,7 @@ class Attempt {
     if (!TERMINAL.has(this.phase)) {
       if (this.url !== undefined && this.phase !== 'starting') view.url = this.url
       if (this.userCode !== undefined && this.phase === 'device') view.userCode = this.userCode
+      if (this.options !== undefined && this.phase === 'select') view.options = this.options
       if (this.placeholder !== undefined && this.pending !== undefined) view.placeholder = this.placeholder
     }
     if (this.message !== undefined) view.message = this.message
@@ -402,7 +405,7 @@ export class AuthBridge {
   }
 
   /** `appAuth/begin`: starts a sign-in and returns its id at once; progress is polled. */
-  async begin(provider) {
+  async begin(provider, selectMethod = false) {
     const spec = this.#spec(provider)
     this.#prune()
     // Tapping "sign in" again replaces the attempt in flight (DSH runs one per key).
@@ -412,7 +415,8 @@ export class AuthBridge {
       this.#abort(previous)
       await settleWithin(previous.done, 5000)
     }
-    const attempt = new Attempt(randomUUID(), provider)
+    // Older clients cannot render a select phase; they keep the browser default.
+    const attempt = new Attempt(randomUUID(), provider, selectMethod === true)
     this.#attempts.set(attempt.id, attempt)
     this.#liveByProvider.set(provider, attempt)
     attempt.timer = setTimeout(() => {
@@ -432,7 +436,7 @@ export class AuthBridge {
     return attempt.view()
   }
 
-  /** `appAuth/answer`: the pasted code or redirect URL for a pending prompt. */
+  /** `appAuth/answer`: a method id, pasted code or redirect URL for a pending prompt. */
   answer(attemptId, value) {
     const attempt = this.#attempts.get(String(attemptId))
     if (attempt === undefined || !attempt.live) throw new this.#RemoteError('app-auth/attempt-over', ERRORS.expired, {})
@@ -441,7 +445,11 @@ export class AuthBridge {
     const text = typeof value === 'string' ? value.trim() : ''
     if (text.length === 0) throw new this.#RemoteError('app-auth/empty-answer', '先粘贴授权信息', {})
     if (text.length > MAX_ANSWER_LENGTH) throw new this.#RemoteError('app-auth/answer-too-long', ERRORS.badPaste, {})
+    if (attempt.options !== undefined && !attempt.options.some((option) => option.id === text)) {
+      throw new this.#RemoteError('app-auth/invalid-choice', '请选择一个登录方式', {})
+    }
     attempt.pending = undefined
+    attempt.options = undefined
     attempt.placeholder = undefined
     attempt.set('starting', COPY.finishing)
     pending.resolve(text)
@@ -574,15 +582,17 @@ export class AuthBridge {
 
   /** A question from pi-ai's login. */
   #onPrompt(attempt, prompt) {
-    if (isObject(prompt) && prompt.kind === 'select') {
-      // pi-ai first asks which login to run. Browser login is the phone's best
-      // path (one tap through Custom Tabs, the engine catches the localhost
-      // redirect) and it keeps a paste fallback of its own.
-      const options = Array.isArray(prompt.options) ? prompt.options : []
-      const choice = options.find((option) => option?.id === 'browser') ?? options[0]
-      if (choice === undefined) return Promise.reject(new Error('the login offered no method'))
-      this.#log(`${attempt.provider}: login method "${choice.id}"`)
-      return Promise.resolve(choice.id)
+    const selecting = isObject(prompt) && prompt.kind === 'select'
+    let options
+    if (selecting) {
+      options = (Array.isArray(prompt.options) ? prompt.options : [])
+        .filter((option) => typeof option?.id === 'string' && option.id.length > 0 && typeof option.label === 'string')
+        .map(({ id, label }) => ({ id, label }))
+      if (options.length === 0) return Promise.reject(new Error('the login offered no method'))
+      if (!attempt.selectMethod) {
+        const choice = options.find((option) => option.id === 'browser') ?? options[0]
+        return Promise.resolve(choice.id)
+      }
     }
     // text / secret: the authorization code or the redirect URL, pasted. In a
     // browser login this races the callback; pi-ai withdraws it (prompt.signal)
@@ -596,15 +606,18 @@ export class AuthBridge {
       const withdraw = () => {
         if (attempt.pending !== pending) return
         attempt.pending = undefined
+        attempt.options = undefined
         attempt.placeholder = undefined
-        if (attempt.live && (attempt.phase === 'open' || attempt.phase === 'prompt')) attempt.set('starting', COPY.finishing)
+        if (attempt.live && ['open', 'prompt', 'select'].includes(attempt.phase)) attempt.set('starting', COPY.finishing)
         reject(new Error('the prompt was withdrawn'))
       }
       prompt?.signal?.addEventListener?.('abort', withdraw, { once: true })
       attempt.controller.signal.addEventListener('abort', withdraw, { once: true })
       attempt.pending = pending
+      attempt.options = options
       attempt.placeholder = typeof prompt?.placeholder === 'string' ? prompt.placeholder : undefined
-      if (attempt.url !== undefined && attempt.callbackLikely) attempt.set('open', COPY.open)
+      if (selecting) attempt.set('select', typeof prompt.message === 'string' ? prompt.message : undefined)
+      else if (attempt.url !== undefined && attempt.callbackLikely) attempt.set('open', COPY.open)
       else attempt.set('prompt', COPY.prompt)
     })
   }
@@ -622,6 +635,7 @@ export class AuthBridge {
     attempt.error = error
     attempt.url = undefined
     attempt.userCode = undefined
+    attempt.options = undefined
     attempt.placeholder = undefined
     const pending = attempt.pending
     attempt.pending = undefined

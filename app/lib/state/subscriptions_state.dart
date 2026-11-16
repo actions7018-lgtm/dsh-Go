@@ -11,7 +11,7 @@ import 'models_state.dart';
 import 'providers_state.dart';
 import 'read_list_epoch.dart';
 
-export 'package:dsh_client/dsh_client.dart' show LoginPhase, LoginStep, Subscription, SubscriptionStatus;
+export 'package:dsh_client/dsh_client.dart' show LoginOption, LoginPhase, LoginStep, Subscription, SubscriptionStatus;
 
 /// 订阅在界面上的名字。
 String subscriptionLabel(Subscription s) => switch (s) {

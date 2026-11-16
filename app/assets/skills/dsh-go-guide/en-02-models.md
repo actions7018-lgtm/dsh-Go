@@ -34,7 +34,7 @@ Switching hosts or reconnecting reads that host's defaults again; unsubmitted ch
 Providers come in three groups:
 
 - **Official**: DeepSeek. Tap it to open your account, where you sign in or enter an API key. On a remote host, this only shows whether that host is set up; configure it on that host.
-- **Subscriptions**: shown when the engine supports them and is connected. Tap **Sign in** and follow the steps in your browser. Open a signed-in subscription to see its models or **Sign out**, which removes its models from the model list.
+- **Subscriptions**: shown when the engine supports them and is connected. Tap **Sign in** and choose a method offered by the engine. For ChatGPT, when available, choose **Device code sign-in**: copy the displayed code, open the verification page and enter it, then return to the app to wait for the result; **Browser sign-in** remains available. Older engines may still open the browser directly. Start again if the code expires or authorization fails. Open a signed-in subscription to see its models or **Sign out**, which removes its models from the model list.
 - **Custom**: providers you add, plus ones configured in DSH Web or the engine's config file. Connect to the engine to add one.
 
 ## Add a custom provider

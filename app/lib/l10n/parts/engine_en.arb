@@ -1,4 +1,8 @@
 {
+  "engineSubscriptionChooseMethod": "Choose a sign-in method",
+  "engineSubscriptionBrowserMethod": "Browser sign-in",
+  "engineSubscriptionDeviceMethod": "Device code sign-in",
+  "engineSubscriptionCopyMethod": "Copy authorization code",
   "engineNewChatDefaultsLast": "New chat defaults (last choice)",
   "engineNewChatDefaultsFixed": "New chat defaults (fixed)",
   "engineNewChatUseLast": "Last choice",

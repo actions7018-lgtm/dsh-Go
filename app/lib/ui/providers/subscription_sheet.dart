@@ -141,6 +141,12 @@ class _SubscriptionLoginSheetState extends ConsumerState<SubscriptionLoginSheet>
         label: l10n.engineSubscriptionPreparing,
         tall: true,
       ),
+      LoginPhase.select => _MethodBody(
+        key: const ValueKey('select'),
+        options: step.options,
+        busy: session?.answering ?? false,
+        onSelect: (id) => unawaited(session?.answer(id)),
+      ),
       LoginPhase.open => _OpenBody(
         key: const ValueKey('open'),
         browserFailed: _browserFailed,
@@ -299,6 +305,43 @@ class _Pair extends StatelessWidget {
       Expanded(child: SizedBox(height: 48, child: right)),
     ],
   );
+}
+
+class _MethodBody extends StatelessWidget {
+  const _MethodBody({super.key, required this.options, required this.busy, required this.onSelect});
+
+  final List<LoginOption> options;
+  final bool busy;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          l10n.engineSubscriptionChooseMethod,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 20),
+        for (final option in options) ...[
+          OutlinedButton(
+            onPressed: busy ? null : () => onSelect(option.id),
+            child: Text(switch (option.id) {
+              'browser' => l10n.engineSubscriptionBrowserMethod,
+              'device_code' => l10n.engineSubscriptionDeviceMethod,
+              'copy_code' => l10n.engineSubscriptionCopyMethod,
+              _ => option.label,
+            }),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
 }
 
 class _OpenBody extends StatelessWidget {

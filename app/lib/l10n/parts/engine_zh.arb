@@ -1,4 +1,8 @@
 {
+  "engineSubscriptionChooseMethod": "选择登录方式",
+  "engineSubscriptionBrowserMethod": "浏览器登录",
+  "engineSubscriptionDeviceMethod": "设备代码登录",
+  "engineSubscriptionCopyMethod": "复制授权码登录",
   "engineNewChatDefaultsLast": "新对话默认（上次选择）",
   "engineNewChatDefaultsFixed": "新对话默认（固定）",
   "engineNewChatUseLast": "沿用上次",

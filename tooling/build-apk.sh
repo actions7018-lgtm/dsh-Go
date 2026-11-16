@@ -17,6 +17,7 @@
 #   -n, --build-number N             use 2..2100000000 instead of the build minute (never lower than installed)
 #   --build-name X.Y.Z               version name instead of app/pubspec.yaml's
 #   --keep-daemon                    leave the Gradle daemon running afterwards
+#   --reuse-tawcroot                use the existing per-ABI tawcroot library
 #   --beta                           embed the beta channel token (internal builds only)
 #   --dry-run                        print what would run
 #
@@ -35,7 +36,7 @@ OUT="$APP/build/app/outputs/flutter-apk"
 usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { echo "build-apk: $*" >&2; exit 1; }
 
-flavor=arm64 mode=release target='' code='' name='' dry=0 keep_daemon=0 want_beta=0
+flavor=arm64 mode=release target='' code='' name='' dry=0 keep_daemon=0 want_beta=0 reuse_tawcroot=0
 extra=()
 while (($#)); do
   case "$1" in
@@ -49,6 +50,7 @@ while (($#)); do
     --build-name) name=${2:?--build-name needs a version}; shift 2 ;;
     --build-name=*) name=${1#*=}; shift ;;
     --keep-daemon) keep_daemon=1; shift ;;
+    --reuse-tawcroot) reuse_tawcroot=1; shift ;;
     --beta) want_beta=1; shift ;;
     --dry-run) dry=1; shift ;;
     -h | --help) usage; exit 0 ;;
@@ -158,7 +160,13 @@ fi
 
 # libtawcroot.so for the opt-in tawcroot launch method, from the pinned tawc commit.
 # Release builds must carry it; other builds go on without it (the option shows unavailable).
-if ! python3 -I "$ROOT/runtime/tawcroot/build.py"; then
+if ((reuse_tawcroot)); then
+  for f in "${flavors[@]}"; do
+    case "$f" in arm64) abi=arm64-v8a ;; x64) abi=x86_64 ;; esac
+    [[ -s "$ROOT/runtime/out-tawcroot/jniLibs/$abi/libtawcroot.so" ]] ||
+      die "missing prebuilt libtawcroot.so for $abi"
+  done
+elif ! python3 -I "$ROOT/runtime/tawcroot/build.py"; then
   [[ $mode == release ]] && die "tawcroot: libtawcroot.so did not build"
   rm -rf "$ROOT/runtime/out-tawcroot" # never package an older build's library
   echo "build-apk: building without libtawcroot.so; the tawcroot launch option will be unavailable" >&2

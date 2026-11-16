@@ -199,13 +199,48 @@ void main() {
       expect(_sent(carrier), [
         [
           'appAuth/begin',
-          {'provider': 'openai-codex'},
+          {'provider': 'openai-codex', 'selectMethod': true},
         ],
         [
           'appAuth/begin',
-          {'provider': 'anthropic'},
+          {'provider': 'anthropic', 'selectMethod': true},
         ],
       ]);
+    });
+
+    test('an older bridge rejects the capability before invocation; use browser default', () async {
+      final carrier = _ScriptedCarrier({
+        'appAuth/begin': (args) => args.containsKey('selectMethod')
+            ? const RpcError(
+                DshRemoteException(
+                  'gateway/arguments-invalid',
+                  'typert gateway: appAuth/begin: args fields do not match the descriptor: unexpected "selectMethod"',
+                ),
+              )
+            : ok({'attemptId': 'legacy'}),
+      });
+      expect(await DshClient.withCarrier(carrier).beginLogin(Subscription.chatgpt), 'legacy');
+      expect(_sent(carrier), [
+        [
+          'appAuth/begin',
+          {'provider': 'openai-codex', 'selectMethod': true},
+        ],
+        [
+          'appAuth/begin',
+          {'provider': 'openai-codex'},
+        ],
+      ]);
+    });
+
+    test('unrelated gateway errors must not replay a login', () async {
+      for (final error in [
+        const DshRemoteException('gateway/internal', 'unexpected "selectMethod"'),
+        const DshRemoteException('gateway/arguments-invalid', 'missing "provider"'),
+      ]) {
+        final carrier = _ScriptedCarrier({'appAuth/begin': (_) => RpcError(error)});
+        await expectLater(DshClient.withCarrier(carrier).beginLogin(Subscription.chatgpt), throwsA(same(error)));
+        expect(carrier.calls, hasLength(1));
+      }
     });
 
     test('no attempt id is a FormatException', () async {
@@ -248,6 +283,35 @@ void main() {
       ]);
       return step;
     }
+
+    test('select preserves the offered method ids and labels', () async {
+      final step = await poll({
+        'phase': 'select',
+        'options': [
+          {'id': 'browser', 'label': 'Browser login (default)'},
+          {'id': 'device_code', 'label': 'Device code login (headless)'},
+          {'id': '', 'label': 'invalid'},
+          {'id': 'missing-label'},
+          null,
+        ],
+      });
+      expect(step.phase, LoginPhase.select);
+      expect(step.phase.finished, isFalse);
+      expect(step.options.map((option) => option.id), ['browser', 'device_code']);
+      expect(step.options.last.label, 'Device code login (headless)');
+      expect((await poll({'phase': 'open'})).options, isEmpty);
+    });
+
+    test('device selection uses the existing answer endpoint', () async {
+      final carrier = _ScriptedCarrier({'appAuth/answer': (_) => ok(<String, Object?>{})});
+      await DshClient.withCarrier(carrier).answerLogin('a1', 'device_code');
+      expect(_sent(carrier), [
+        [
+          'appAuth/answer',
+          {'attemptId': 'a1', 'value': 'device_code'},
+        ],
+      ]);
+    });
 
     test('open: authorize URL, paste placeholder and message', () async {
       final step = await poll({

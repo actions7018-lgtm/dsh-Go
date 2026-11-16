@@ -494,6 +494,104 @@ test('dispose withdraws live attempts', async () => {
   await waitFor(bridge, attemptId, phase('cancelled'))
 })
 
+// ── explicit login-method selection (all flows are local fakes) ──────────
+
+const LOGIN_OPTIONS = [
+  { id: 'browser', label: 'Browser login (default)' },
+  { id: 'device_code', label: 'Device code login (headless)' },
+]
+
+test('opt-in selection waits for a valid answer, then browser login still accepts a paste', async () => {
+  const { bridge, authorization } = setup({ portFree: false })
+  const login = browserLogin({ provider: 'openai-codex', callback: null })
+  authorization.register('llm-pi-ai/openai-codex', login.run)
+  const { attemptId } = await bridge.begin('openai-codex', true)
+  const select = await waitFor(bridge, attemptId, phase('select'))
+  assert.deepEqual(select, {
+    phase: 'select', message: 'Select login method:',
+    options: [LOGIN_OPTIONS[0], { id: 'device_code', label: 'Headless' }],
+  })
+  assert.deepEqual(login.calls.methods, [], 'no method is selected before an answer')
+  for (const [value, code] of [['unknown', 'app-auth/invalid-choice'], ['', 'app-auth/empty-answer']]) {
+    assert.throws(() => bridge.answer(attemptId, value), (error) => error.code === code)
+    assert.deepEqual(bridge.poll(attemptId), select, 'invalid answers leave the selection pending')
+  }
+  bridge.answer(attemptId, 'browser')
+  const paste = await waitFor(bridge, attemptId, phase('prompt'))
+  assert.equal(paste.options, undefined)
+  assert.deepEqual(login.calls.methods, ['browser'])
+  bridge.answer(attemptId, 'http://localhost:1455/auth/callback?code=c1&state=state-1')
+  assert.deepEqual(await waitFor(bridge, attemptId, phase('done')), { phase: 'done' })
+})
+
+test('device selection exposes only verification URL/code and finishes without a paste or callback', async () => {
+  const { bridge, authorization, credentials, settings, logs } = setup({ portFree: false })
+  const approved = deferred()
+  const calls = []
+  authorization.register('llm-pi-ai/openai-codex', async ({ prompt, notify, commit }) => {
+    const method = await prompt({ kind: 'select', message: 'Choose a login', options: LOGIN_OPTIONS })
+    calls.push(method)
+    assert.equal(method, 'device_code')
+    notify({ message: 'Enter this code', url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234' })
+    await approved.promise
+    await commit({ kind: 'grant', payload: { access: CODEX_TOKEN, refresh: 'fake-private-refresh', expires: Date.now() + 3600e3 } })
+  })
+  const { attemptId } = await bridge.begin('openai-codex', true)
+  const select = await waitFor(bridge, attemptId, phase('select'))
+  assert.deepEqual(select.options, LOGIN_OPTIONS)
+  bridge.answer(attemptId, 'device_code')
+  const device = await waitFor(bridge, attemptId, phase('device'))
+  assert.deepEqual(device, { phase: 'device', url: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234', message: COPY.device })
+  assert.deepEqual(calls, ['device_code'])
+  assert.deepEqual(authorization.requests, [{ key: 'llm-pi-ai/openai-codex', method: 'oauth' }])
+  assert.throws(() => bridge.answer(attemptId, 'ABCD-1234'), (error) => error.code === 'app-auth/not-waiting')
+  assert.equal(credentials.records.size, 0)
+  assert.equal(settings.mutations.length, 0)
+  approved.resolve()
+  assert.deepEqual(await waitFor(bridge, attemptId, phase('done')), { phase: 'done' })
+  assert.equal(credentials.records.get('llm-pi-ai/openai-codex')?.kind, 'grant')
+  assert.ok(settings.user.providers['openai-codex'])
+  const publicData = JSON.stringify([select, device, bridge.poll(attemptId), logs])
+  for (const secret of [CODEX_TOKEN, 'fake-private-refresh']) assert.equal(publicData.includes(secret), false)
+  assert.equal(logs.join('\n').includes('ABCD-1234'), false, 'device code is not logged')
+})
+
+for (const action of ['cancel', 'timeout', 'dispose', 'replace']) {
+  test(`pending selection is rejected and cleared on ${action}`, async () => {
+    const { bridge, authorization, credentials, settings } = setup(action === 'timeout' ? { ttlMs: 60 } : {})
+    const rejected = []
+    authorization.register('llm-pi-ai/openai-codex', async ({ prompt }) => {
+      try {
+        await prompt({ kind: 'select', message: 'Choose a login', options: LOGIN_OPTIONS })
+        assert.fail('withdrawn selection must not resolve')
+      } catch (error) {
+        rejected.push(error)
+        throw error
+      }
+    })
+    const { attemptId } = await bridge.begin('openai-codex', true)
+    await waitFor(bridge, attemptId, phase('select'))
+    let replacement
+    if (action === 'cancel') bridge.cancel(attemptId)
+    if (action === 'dispose') bridge.dispose()
+    if (action === 'replace') replacement = (await bridge.begin('openai-codex', true)).attemptId
+    const terminal = await waitFor(bridge, attemptId, phase(action === 'timeout' ? 'failed' : 'cancelled'))
+    assert.deepEqual(terminal, action === 'timeout' ? { phase: 'failed', error: ERRORS.timeout } : { phase: 'cancelled', error: ERRORS.cancelled })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(rejected.length, 1)
+    assert.ok(rejected[0] instanceof Error)
+    assert.throws(() => bridge.answer(attemptId, 'device_code'), (error) => error.code === 'app-auth/attempt-over')
+    assert.equal(credentials.records.size, 0)
+    assert.equal(settings.mutations.length, 0)
+    if (replacement) {
+      assert.notEqual(replacement, attemptId)
+      assert.deepEqual((await waitFor(bridge, replacement, phase('select'))).options, LOGIN_OPTIONS)
+      bridge.cancel(replacement)
+      await waitFor(bridge, replacement, phase('cancelled'))
+    }
+  })
+}
+
 // ── the plugin shell against a real DSH install ───────────────────────────
 
 const DSH_INSTALL = process.env.DSH_INSTALL ?? join(homedir(), '.dsh-runtime/npm/lib/node_modules/@deepseek-ai/dsh')
@@ -516,6 +614,6 @@ test('index.mjs loads the host protocol package and exposes SRC-compatible Remot
   }
   assert.deepEqual(
     Object.fromEntries(['list', 'usage', 'begin', 'poll', 'answer', 'cancel', 'signOut'].map((m) => [m, wireNames(m)])),
-    { list: [], usage: ['provider'], begin: ['provider'], poll: ['attemptId'], answer: ['attemptId', 'value'], cancel: ['attemptId'], signOut: ['provider'] },
+    { list: [], usage: ['provider'], begin: ['provider', 'selectMethod'], poll: ['attemptId'], answer: ['attemptId', 'value'], cancel: ['attemptId'], signOut: ['provider'] },
   )
 })
