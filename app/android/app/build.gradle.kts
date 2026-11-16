@@ -45,7 +45,10 @@ android {
     useLibrary("android.test.base")
     useLibrary("android.test.runner")
     ndkVersion = System.getenv("DSH_ANDROID_NDK_VERSION") ?: flutter.ndkVersion
-    buildFeatures { buildConfig = true }
+    buildFeatures {
+        buildConfig = true
+        resValues = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
