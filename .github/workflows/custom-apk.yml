@@ -1,0 +1,74 @@
+name: DSH Go Custom APK
+
+on:
+  push:
+    branches: [codex/phone-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    if: github.repository == 'actions7018-lgtm/dsh-Go'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      DSH_CUSTOM_BUILD: '1'
+      DSH_MAVEN_MIRRORS: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+      - name: Prepare Android and generated resources
+        run: |
+          ndk_version=$(python3 -c 'import json; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
+          sdkmanager "ndk;$ndk_version"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk_version" >> "$GITHUB_ENV"
+          sed -i 's#mirrors.cloud.tencent.com/gradle/#services.gradle.org/distributions/#' app/android/gradle/wrapper/gradle-wrapper.properties
+          python3 app/tool/l10n_merge.py
+          python3 app/tool/guide_sync.py
+      - name: Build and verify the full ARM64 runtime
+        run: |
+          runtime/build-runtime.sh arm64-v8a
+          python3 -I tooling/check_runtime_bundle.py arm64
+      - name: Build signed release APK
+        env:
+          KEYSTORE: ${{ secrets.DSH_CUSTOM_KEYSTORE }}
+          KEY_PASSWORD: ${{ secrets.DSH_CUSTOM_KEY_PASSWORD }}
+        run: |
+          set -eu
+          umask 077
+          test -n "$KEYSTORE" && test -n "$KEY_PASSWORD"
+          trap 'rm -f "$RUNNER_TEMP/dsh-custom.p12" app/android/key.properties' EXIT
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/dsh-custom.p12"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=dsh-custom\nkeyPassword=%s\n' \
+            "$RUNNER_TEMP/dsh-custom.p12" "$KEY_PASSWORD" "$KEY_PASSWORD" > app/android/key.properties
+          bash tooling/build-apk.sh -- \
+            --dart-define=DSH_UPDATE_REPO=actions7018-lgtm/dsh-Go --dart-define=DSH_UPDATE_MIRROR=
+      - name: Verify and stage APK
+        run: |
+          apk=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          sdk_tools=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$sdk_tools" verify --print-certs "$apk"
+          mkdir -p dist
+          cp "$apk" dist/DSH-Go-Custom-arm64.apk
+          (cd dist && sha256sum DSH-Go-Custom-arm64.apk > DSH-Go-Custom-arm64.apk.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: DSH-Go-Custom-arm64
+          path: dist/
+          compression-level: 0
+          if-no-files-found: error
